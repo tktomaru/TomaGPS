@@ -1,0 +1,18 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 背景色 -->
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#AAFFFFFF" /> <!-- 半透明白 -->
+        </shape>
+    </item>
+
+    <!-- ぼかし風グラデーション -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:startColor="#33FFFFFF"
+                android:endColor="#00FFFFFF"
+                android:angle="270" />
+        </shape>
+    </item>
+</layer-list>
