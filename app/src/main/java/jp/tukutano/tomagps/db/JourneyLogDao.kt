@@ -17,4 +17,7 @@ interface JourneyLogDao {
 
     @Delete
     fun delete(log: JourneyLogEntity)
+
+    @Query("DELETE FROM journey_logs WHERE id = :id")
+    fun deleteById(id: Long): Int
 }

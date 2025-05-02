@@ -8,8 +8,10 @@ import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import jp.tukutano.tomagps.R
 import jp.tukutano.tomagps.databinding.FragmentLogListBinding
+import jp.tukutano.tomagps.model.JourneyLog
 import jp.tukutano.tomagps.ui.detail.LogDetailActivity
 import kotlinx.coroutines.flow.collectLatest
 
@@ -20,13 +22,29 @@ class LogListFragment : Fragment(R.layout.fragment_log_list) {
     private val vm: LogListViewModel by viewModels()
 
     // ← ここを TrackPointAdapter から LogAdapter に変更
-    private val adapter = LogAdapter { log ->
-        // 詳細画面へ遷移
-        val intent = Intent(requireContext(), LogDetailActivity::class.java).apply {
-            putExtra(LogDetailActivity.EXTRA_LOG_ID, log.id)
+    private val
+            adapter = LogAdapter(object : LogAdapter.Listener {
+        override fun onItemClicked(log: JourneyLog) {
+            // 既存の詳細遷移
+            // 詳細画面へ遷移
+            val intent = Intent(requireContext(), LogDetailActivity::class.java).apply {
+                putExtra(LogDetailActivity.EXTRA_LOG_ID, log.id)
+            }
+            startActivity(intent)
         }
-        startActivity(intent)
-    }
+
+        override fun onDeleteClicked(log: JourneyLog) {
+            // 確認ダイアログ
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle("このログを削除しますか？")
+                .setPositiveButton("削除") { _, _ ->
+                    vm.deleteLog(log)
+                }
+                .setNegativeButton("キャンセル", null)
+                .show()
+        }
+
+    });
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         _binding = FragmentLogListBinding.bind(view)

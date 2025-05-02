@@ -27,4 +27,7 @@ class JourneyLogRepository(
     fun delete(log: JourneyLog) =
         dao.delete(log.toEntity())
 
+    fun deleteById(id: Long) {
+        dao.deleteById(id)
+    }
 }
