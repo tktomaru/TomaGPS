@@ -16,12 +16,12 @@ data class JourneyLog(
 
 // 拡張関数で相互変換
 fun JourneyLogEntity.toDomain() = JourneyLog(
-    id         = id,
-    title      = title,
-    date       = LocalDateTime.ofInstant(
+    id = id,
+    title = title,
+    date = LocalDateTime.ofInstant(
         Instant.ofEpochMilli(dateMillis), ZoneId.systemDefault()),
     distanceKm = distanceKm,
-    thumbnail  = thumbnail?.let { Uri.parse(it) }
+    thumbnail = thumbnail?.let { Uri.parse(it) }
 )
 
 fun JourneyLog.toEntity() = JourneyLogEntity(

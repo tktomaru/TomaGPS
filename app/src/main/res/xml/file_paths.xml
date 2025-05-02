@@ -2,4 +2,8 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- cacheDir 以下を共有 -->
     <cache-path name="cache" path="."/>
+    <!-- externalMediaDirs() で使われる /storage/.../Android/media/<package>/ 以下 -->
+    <external-path
+        name="external_media"
+        path="Android/media/jp.tukutano.tomagps/" />
 </paths>
