@@ -66,6 +66,18 @@
             android:layout_marginBottom="80dp"
             android:layout_marginEnd="16dp" />
 
+        <!-- Camera (Start/Stop の上に少し上げて配置) -->
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/fabPhoto"
+            android:src="@drawable/ic_folder"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:layout_anchor="@id/fabStartStop"
+            app:layout_anchorGravity="bottom|end"
+            android:layout_marginBottom="150dp"
+            android:layout_marginEnd="16dp" />
+
+
         <com.google.android.material.floatingactionbutton.FloatingActionButton
             android:id="@+id/fabMyLocation"
             android:layout_width="wrap_content"

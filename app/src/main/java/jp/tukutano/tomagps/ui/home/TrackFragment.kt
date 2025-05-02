@@ -135,6 +135,21 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
             }
         }
 
+        // ③ fabCamera のクリックでギャラリー起動
+        view.findViewById<FloatingActionButton>(R.id.fabPhoto)
+            .setOnClickListener {
+                if (tracking) {
+                    // 画像タイプを指定してギャラリーを開く
+                    imagePicker.launch("image/*")
+                } else {
+                    Toast.makeText(
+                        requireContext(),
+                        "まず計測を開始してください",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+
         /* Flow 監視 */
         lifecycleScope.launchWhenStarted {
             vm.path.collect { drawPath(it) }
@@ -260,6 +275,35 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
         super.onResume()
         if (::map.isInitialized) {
             drawPath(vm.path.value)
+        }
+    }
+
+
+    // ① GetContent で画像選択用ランチャーを登録
+    private val imagePicker = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            // 最後の地点を取得して PhotoEntry を作成
+            val lastPoint = vm.path.value.lastOrNull()
+            if (lastPoint != null) {
+                val entry = PhotoEntry(
+                    lat   = lastPoint.lat,
+                    lng   = lastPoint.lng,
+                    time  = lastPoint.time,
+                    uri   = it
+                )
+                vm.addPhoto(entry)
+                Toast.makeText(requireContext(),
+                    "写真を追加：(${entry.lat}, ${entry.lng})",
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else {
+                Toast.makeText(requireContext(),
+                    "位置情報がありません",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
     }
 }
