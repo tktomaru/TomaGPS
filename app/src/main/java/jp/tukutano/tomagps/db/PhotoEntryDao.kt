@@ -13,4 +13,7 @@ interface PhotoEntryDao {
 
     @Query("SELECT * FROM photo_entries WHERE logId = :logId ORDER BY timestamp ASC")
     fun getByLogId(logId: Long): Flow<List<PhotoEntryEntity>>
+
+    @Query("DELETE FROM photo_entries WHERE uri = :uriString")
+    fun deleteByUri(uriString: String): Int
 }

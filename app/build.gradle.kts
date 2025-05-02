@@ -75,8 +75,8 @@ dependencies {
 //    implementation("androidx.room:room-runtime:2.5.1")
 //    implementation("androidx.room:room-ktx:2.5.1")
     kapt("androidx.room:room-compiler:2.5.1")
-    implementation("com.google.android.gms:play-services-location:21.0.1")
-    implementation("com.google.android.gms:play-services-maps:18.1.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.google.android.gms:play-services-maps:19.2.0")
     implementation("com.github.bumptech.glide:glide:4.14.2")
     annotationProcessor("com.github.bumptech.glide:compiler:4.14.2")
 

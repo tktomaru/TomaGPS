@@ -8,9 +8,9 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
 import android.widget.EditText
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -24,286 +24,286 @@ import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.OnMapReadyCallback
 import com.google.android.gms.maps.SupportMapFragment
-import com.google.android.gms.maps.model.BitmapDescriptorFactory
-import com.google.android.gms.maps.model.CircleOptions
-import com.google.android.gms.maps.model.LatLng
-import com.google.android.gms.maps.model.MarkerOptions
-import com.google.android.gms.maps.model.Polyline
-import com.google.android.gms.maps.model.PolylineOptions
+import com.google.android.gms.maps.model.*
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import jp.tukutano.tomagps.R
+import jp.tukutano.tomagps.databinding.FragmentTrackBinding
 import jp.tukutano.tomagps.service.PhotoEntry
 import jp.tukutano.tomagps.service.TrackPoint
 import jp.tukutano.tomagps.ui.capture.PhotoCaptureActivity
+import jp.tukutano.tomagps.ui.detail.PhotoPreviewDialogFragment
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import java.io.File
 
-class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
+class TrackFragment : Fragment(R.layout.fragment_track),
+    OnMapReadyCallback {
 
+    private var _binding: FragmentTrackBinding? = null
+    private val binding get() = _binding!!
     private val vm: TrackViewModel by viewModels()
+
     private lateinit var map: GoogleMap
-    private var tracking = false
     private lateinit var fusedClient: FusedLocationProviderClient
 
-    // １度だけ作るPolyline
+    private var tracking = false
     private var polyline: Polyline? = null
-    // 追加済みのデータ数を覚えておく
     private var lastDrawnSize = 0
 
-    private fun onStopTracking() {
-        // サービス停止は ViewModel 側でも行われるので省略可。ここではタイトル入力と保存呼び出し
-        val edit = EditText(requireContext()).apply {
-            hint = "ログタイトルを入力"
-        }
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle("タイトルを入力")
-            .setView(edit)
-            .setPositiveButton("保存") { _, _ ->
-                val title = edit.text.toString().takeIf { it.isNotBlank() } ?: "無題"
-                // Map のスナップショットをサムネとして保存
-                map.snapshot { bmp ->
-                    val thumbUri = saveBmp(requireContext(), bmp)
-                    // ここで必ず title, thumbnail を渡す
-                    vm.stopAndSavePoints(title, thumbUri)
-                    Toast.makeText(
-                        requireContext(),
-                        "ログを保存しました", Toast.LENGTH_SHORT
-                    ).show()
-                }
+    // 写真ピンを保持: URI → Marker
+    private val photoMarkers = mutableMapOf<Uri, Marker>()
+
+    // Launchers
+    private val photoLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.getStringExtra("photo_uri")?.let { uriStr ->
+                val uri = Uri.parse(uriStr)
+                val lat = result.data?.getDoubleExtra("lat", Double.NaN) ?: return@let
+                val lng = result.data?.getDoubleExtra("lng", Double.NaN) ?: return@let
+                addPhotoEntry(uri, lat, lng)
             }
-            .setNegativeButton("破棄", null)
-            .show()
+        }
     }
+
+    private val imagePicker = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri -> uri?.let { pickPhoto(it) } }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-        // Map
+        super.onViewCreated(view, savedInstanceState)
+        _binding = FragmentTrackBinding.bind(view)
+        fusedClient = LocationServices.getFusedLocationProviderClient(requireContext())
+        setupMap()
+        setupFabListeners()
+        observeViewModel()
+
+        // ① FragmentResultListener を登録
+        childFragmentManager.setFragmentResultListener(
+            PhotoPreviewDialogFragment.REQUEST_KEY_PHOTO_DELETED,
+            viewLifecycleOwner
+        ) { _, bundle ->
+            val uri = bundle.getParcelable<Uri>(PhotoPreviewDialogFragment.KEY_URI)
+            if (uri != null) {
+                handlePhotoDeleted(uri)
+            }
+        }
+    }
+
+    /** PhotoPreviewDialogFragment から飛んできた削除イベント */
+    private fun handlePhotoDeleted(uri: Uri) {
+        // 地図上のマーカーだけを削除
+        // 2) マーカーを地図から消して、コレクションからも外す
+        photoMarkers[uri]?.remove()
+        photoMarkers.remove(uri)
+        // ViewModel 側のデータからも削除
+        vm.removePhoto(uri)
+        // 3) 残りのマーカーを再同期
+        drawPhotoPins(vm.photos.value)
+    }
+
+    override fun onDestroyView() {
+        super.onDestroyView()
+        _binding = null
+    }
+
+    /** Map 初期化 */
+    private fun setupMap() {
         (childFragmentManager.findFragmentById(R.id.mapFragment) as SupportMapFragment)
             .getMapAsync(this)
+    }
 
-        val fabStartStop = view.findViewById<FloatingActionButton>(R.id.fabStartStop)
-        val fabCamera = view.findViewById<FloatingActionButton>(R.id.fabCamera)
-        val fabMyLocation = view.findViewById<FloatingActionButton>(R.id.fabMyLocation)
-        fusedClient = LocationServices.getFusedLocationProviderClient(requireContext())
+    /** FAB リスナー */
+    private fun setupFabListeners() = binding.apply {
+        fabStartStop.setOnClickListener { toggleTracking() }
+        fabPhoto.setOnClickListener { if (tracking) imagePicker.launch("image/*") }
+        fabCamera.setOnClickListener { if (tracking) capturePhoto() }
+        fabMyLocation.setOnClickListener { moveToMyLocation() }
+    }
 
-        fabStartStop.setOnClickListener {
-            if (!tracking) {
-                vm.start()
-                tracking = true
-                fabStartStop.setImageResource(R.drawable.ic_stop)
-            } else {
-                // 停止時に DB へ永続化
-                onStopTracking()
-                tracking = false
-                fabStartStop.setImageResource(R.drawable.ic_play)
+    /** ViewModel フロー監視 */
+    private fun observeViewModel() {
+        with(binding) {
+            lifecycleScope.launchWhenStarted {
+                vm.distanceKm.collect { tvDistance.text = "%.1f km".format(it) }
             }
-        }
-
-        fabCamera.setOnClickListener {
-            if (tracking) {
-                photoLauncher.launch(
-                    Intent(requireContext(), PhotoCaptureActivity::class.java)
-                )
-            } else {
-                Toast.makeText(requireContext(), "まず計測を開始してください", Toast.LENGTH_SHORT)
-                    .show()
-            }
-        }
-
-        fabMyLocation.setOnClickListener {
-            // 1) 権限確認
-            if (ContextCompat.checkSelfPermission(
-                    requireContext(),
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                )
-                != PackageManager.PERMISSION_GRANTED
-            ) {
-                // 必要ならリクエスト
-                requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1001)
-                return@setOnClickListener
-            }
-            // 2) 直近の現在地を取得
-            fusedClient.lastLocation.addOnSuccessListener { loc ->
-                if (loc != null && ::map.isInitialized) {
-                    val now = LatLng(loc.latitude, loc.longitude)
-                    // マーカーがいらなければ省略
-                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(now, 15f))
-                } else {
-                    Toast.makeText(requireContext(), "現在地が取得できません", Toast.LENGTH_SHORT)
-                        .show()
-                }
-            }
-        }
-
-        // ③ fabCamera のクリックでギャラリー起動
-        view.findViewById<FloatingActionButton>(R.id.fabPhoto)
-            .setOnClickListener {
-                if (tracking) {
-                    // 画像タイプを指定してギャラリーを開く
-                    imagePicker.launch("image/*")
-                } else {
-                    Toast.makeText(
-                        requireContext(),
-                        "まず計測を開始してください",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-            }
-
-        /* Flow 監視 */
-        lifecycleScope.launchWhenStarted {
-            vm.path.collect { drawPath(it) }
-        }
-        lifecycleScope.launchWhenStarted {
-            vm.distanceKm.collect { dist ->
-                view.findViewById<TextView>(R.id.tvDistance).text =
-                    String.format("%.1f km", dist)
-            }
-        }
-        lifecycleScope.launchWhenStarted {
-            vm.elapsed.collect { sec ->
-                view.findViewById<TextView>(R.id.tvTime).text = toHms(sec)
-                val speed = if (sec > 0) vm.distanceKm.value / (sec / 3600.0) else 0.0
-                view.findViewById<TextView>(R.id.tvSpeed).text =
-                    String.format("%.1f km/h", speed)
+            lifecycleScope.launchWhenStarted {
+                vm.elapsed.collect { tvTime.text = toHms(it) }
             }
         }
     }
 
-    private fun saveBmp(context: Context, bmp: Bitmap?): Uri? {
-        if (bmp == null) return null
-        // キャッシュディレクトリ内にファイルを作成
-        val file = File(context.cacheDir, "map_${System.currentTimeMillis()}.png")
-        file.outputStream().use { out ->
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-        }
-        // FileProvider を使って content:// URI を取得
-        return FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            file
-        )
-    }
-
-    /* 地図描画 */
-    // ViewModel の path.collect { drawPath(it) } から呼ばれる
-    private fun drawPath(points: List<TrackPoint>) {
-        if (!::map.isInitialized || points.isEmpty()) return
-
-        // 増分だけ点を追加
-        for (i in lastDrawnSize until points.size) {
-            val p = points[i]
-            map.addCircle(
-                CircleOptions()
-                    .center(LatLng(p.lat, p.lng))
-                    .radius(2.0)
-                    .strokeWidth(0f)
-                    .fillColor(ContextCompat.getColor(requireContext(), R.color.purple_200))
-            )
-        }
-        lastDrawnSize = points.size
-
-        // ポリライン全体を更新
-        polyline?.points = points.map { LatLng(it.lat, it.lng) }
-
-        // カメラを追従
-        val last = points.last()
-        map.animateCamera(CameraUpdateFactory.newLatLngZoom(
-            LatLng(last.lat, last.lng),
-            map.cameraPosition.zoom
-        ))
-    }
-
+    /** Map 準備完了 */
     override fun onMapReady(googleMap: GoogleMap) {
         map = googleMap
-        map.uiSettings.isMyLocationButtonEnabled = false
         if (ContextCompat.checkSelfPermission(
                 requireContext(),
                 Manifest.permission.ACCESS_FINE_LOCATION
-            )
-            == PackageManager.PERMISSION_GRANTED
-        ) {
-            map.isMyLocationEnabled = true
-        }
-        // 1) 最初に一度だけ Polyline を作成
+            ) == PackageManager.PERMISSION_GRANTED
+        ) map.isMyLocationEnabled = true
+
+        // Polyline 初期化
         polyline = map.addPolyline(
             PolylineOptions()
                 .width(6f)
                 .color(ContextCompat.getColor(requireContext(), R.color.purple_500))
         )
 
-        // 2) Polyline が用意できてから Flow を購読
-        viewLifecycleOwner.lifecycleScope.launchWhenStarted {
-            vm.path.collect { points ->
-                drawPath(points)
+        // マーカークリック: PhotoEntry プレビュー
+        map.setOnMarkerClickListener { marker ->
+            (marker.tag as? PhotoEntry)?.let { entry ->
+                PhotoPreviewDialogFragment.newInstance(entry.uri.toString())
+                    .setMarker(marker)          // ← ここでマーカーを渡す
+                    .show(childFragmentManager, "photo_preview")
+                return@setOnMarkerClickListener true
             }
+            false
+        }
+
+        // ルート更新
+        viewLifecycleOwner.lifecycleScope.launchWhenStarted {
+            vm.path.collect { drawPath(it) }
+        }
+        // 写真ピン追加
+        viewLifecycleOwner.lifecycleScope.launchWhenStarted {
+            vm.photos.collect { drawPhotoPins(it) }
         }
     }
 
-    private fun toHms(sec: Long): String {
-        val h = sec / 3600
-        val m = (sec % 3600) / 60
-        val s = sec % 60
-        return "%02d:%02d:%02d".format(h, m, s)
+    /** トラッキング切り替え */
+    private fun toggleTracking() = binding.fabStartStop.apply {
+        if (!tracking) {
+            vm.startTracking()
+            setImageResource(R.drawable.ic_stop)
+        } else {
+            showSaveDialog()
+            setImageResource(R.drawable.ic_play)
+        }
+        tracking = !tracking
     }
 
+    /** 保存ダイアログ */
+    private fun showSaveDialog() {
+        val edit = EditText(requireContext()).apply { hint = "ログタイトルを入力" }
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("タイトルを入力")
+            .setView(edit)
+            .setPositiveButton("保存") { _, _ ->
+                val title = edit.text.toString().ifBlank { "無題" }
+                map.snapshot { bmp ->
+                    val uri = saveSnapshot(bmp)
+                    vm.stopAndSaveLog(title, uri)
+                    Toast.makeText(requireContext(), "ログを保存しました", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("破棄", null)
+            .show()
+    }
 
-    // PhotoCaptureActivity の結果を受け取るランチャー
-    private val photoLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == Activity.RESULT_OK) {
-                result.data?.let { data ->
-                    val uriStr = data.getStringExtra("photo_uri") ?: return@let
-                    val lat = data.getDoubleExtra("lat", Double.NaN)
-                    val lng = data.getDoubleExtra("lng", Double.NaN)
-                    val uri = Uri.parse(uriStr)
-                    // タイムスタンプは現在時刻を使う
-                    val entry = PhotoEntry(uri, lat, lng, System.currentTimeMillis())
-                    // ViewModel へ追加
-                    vm.addPhoto(entry)
-                    // 地図上にもマーカーを表示
-                    map.addMarker(
-                        MarkerOptions()
-                            .position(LatLng(lat, lng))
-                            .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE))
-                    )
+    /** 写真撮影 */
+    private fun capturePhoto() = photoLauncher.launch(
+        Intent(requireContext(), PhotoCaptureActivity::class.java)
+    )
+
+    /** ギャラリー写真選択 */
+    private fun pickPhoto(uri: Uri) {
+        vm.path.value.lastOrNull()?.let { p ->
+            addPhotoEntry(uri, p.lat, p.lng, p.time)
+        } ?: Toast.makeText(requireContext(), "位置情報がありません", Toast.LENGTH_SHORT).show()
+    }
+
+    /** PhotoEntry 追加＋マーカー作成 */
+    private fun addPhotoEntry(uri: Uri, lat: Double, lng: Double, time: Long = System.currentTimeMillis()) {
+        val entry = PhotoEntry(uri, lat, lng, time)
+        vm.addPhoto(entry)
+        val marker = map.addMarker(
+            MarkerOptions()
+                .position(LatLng(lat, lng))
+                .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE))
+        )
+        marker?.tag = entry
+        if (marker != null) photoMarkers[uri] = marker
+    }
+
+    /** 現在地移動 */
+    private fun moveToMyLocation() {
+        if (ContextCompat.checkSelfPermission(
+                requireContext(),
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1001)
+            return
+        }
+        fusedClient.lastLocation.addOnSuccessListener { loc ->
+            loc?.let {
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(
+                    LatLng(it.latitude, it.longitude), 15f
+                ))
+            } ?: Toast.makeText(requireContext(), "現在地が取得できません", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 路線描画（増分のみ） */
+    private fun drawPath(points: List<TrackPoint>) {
+        for (i in lastDrawnSize until points.size) {
+            val p = points[i]
+            map.addCircle(
+                CircleOptions()
+                    .center(LatLng(p.lat, p.lng))
+                    .radius(2.0)
+                    .fillColor(ContextCompat.getColor(requireContext(), R.color.purple_200))
+            )
+        }
+        lastDrawnSize = points.size
+        polyline?.points = points.map { LatLng(it.lat, it.lng) }
+    }
+
+    /** 写真ピン描画 */
+    private fun drawPhotoPins(list: List<PhotoEntry>) {
+        // 1) VMに存在しないURIのマーカーを削除
+        val currentUris = list.map { it.uri }.toSet()
+        photoMarkers.keys
+            .filter { it !in currentUris }
+            .forEach { uri ->
+                photoMarkers.remove(uri)
+                photoMarkers[uri]?.remove()
+            }
+
+        // 2) VMに存在するがマップに未登録のマーカーだけを追加
+        list.forEach { entry ->
+            if (!photoMarkers.containsKey(entry.uri)) {
+                val marker = map.addMarker(
+                    MarkerOptions()
+                        .position(LatLng(entry.lat, entry.lng))
+                        .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE))
+                        .title("Photo")
+                )
+                marker?.tag = entry
+                if (marker != null) {
+                    photoMarkers[entry.uri] = marker
                 }
             }
         }
-    // Fragmentが再び前面に来たときにも再描画
-    override fun onResume() {
-        super.onResume()
-        if (::map.isInitialized) {
-            drawPath(vm.path.value)
-        }
     }
 
-
-    // ① GetContent で画像選択用ランチャーを登録
-    private val imagePicker = registerForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            // 最後の地点を取得して PhotoEntry を作成
-            val lastPoint = vm.path.value.lastOrNull()
-            if (lastPoint != null) {
-                val entry = PhotoEntry(
-                    lat   = lastPoint.lat,
-                    lng   = lastPoint.lng,
-                    time  = lastPoint.time,
-                    uri   = it
-                )
-                vm.addPhoto(entry)
-                Toast.makeText(requireContext(),
-                    "写真を追加：(${entry.lat}, ${entry.lng})",
-                    Toast.LENGTH_SHORT
-                ).show()
-            } else {
-                Toast.makeText(requireContext(),
-                    "位置情報がありません",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
+    /** Bitmap → content:// URI */
+    private fun saveSnapshot(bmp: Bitmap?): Uri? {
+        bmp ?: return null
+        val file = File(requireContext().cacheDir, "map_\${SystemClock.uptimeMillis()}.png")
+        file.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        return FileProvider.getUriForFile(
+            requireContext(),
+            "${requireContext().packageName}.fileprovider",
+            file
+        )
     }
+
+    private fun toHms(sec: Long) = "%02d:%02d:%02d".format(
+        sec / 3600,
+        (sec % 3600) / 60,
+        sec % 60
+    )
 }

@@ -1,5 +1,6 @@
 package jp.tukutano.tomagps.repository
 
+import android.net.Uri
 import jp.tukutano.tomagps.db.PhotoEntryDao
 import jp.tukutano.tomagps.db.PhotoEntryEntity
 import jp.tukutano.tomagps.service.PhotoEntry
@@ -17,7 +18,7 @@ class PhotoEntryRepository(private val dao: PhotoEntryDao) {
             ) }
         }
 
-    suspend fun savePhotos(logId: Long, photos: List<PhotoEntry>) {
+    fun savePhotos(logId: Long, photos: List<PhotoEntry>) {
         val entities = photos.map {
             PhotoEntryEntity(
                 logId = logId,
@@ -28,5 +29,9 @@ class PhotoEntryRepository(private val dao: PhotoEntryDao) {
             )
         }
         dao.insertAll(entities)
+    }
+
+    fun deleteByUri(uri: Uri) {
+        dao.deleteByUri(uri.toString())
     }
 }

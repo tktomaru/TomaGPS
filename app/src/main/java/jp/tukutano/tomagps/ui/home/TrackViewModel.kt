@@ -6,95 +6,101 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import jp.tukutano.tomagps.AppDatabase
 import jp.tukutano.tomagps.model.JourneyLog
-import jp.tukutano.tomagps.service.TrackPoint
-import jp.tukutano.tomagps.service.TrackingService
 import jp.tukutano.tomagps.repository.JourneyLogRepository
 import jp.tukutano.tomagps.repository.PhotoEntryRepository
 import jp.tukutano.tomagps.repository.TrackPointRepository
 import jp.tukutano.tomagps.service.PhotoEntry
+import jp.tukutano.tomagps.service.TrackPoint
+import jp.tukutano.tomagps.service.TrackingService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
-import kotlin.math.asin
-import kotlin.math.cos
-import kotlin.math.pow
-import kotlin.math.sin
-import kotlin.math.sqrt
+import kotlin.math.*
 
 class TrackViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val trackRepo = TrackPointRepository(
-        AppDatabase.getInstance(app).trackPointDao()
-    )
-    private val repo = JourneyLogRepository(
-        AppDatabase.getInstance(app).journeyLogDao()
-    )
-    private val service = TrackingService(app)  // 本番では ServiceConnection 推奨
+    // Database & Repositories
+    private val database by lazy { AppDatabase.getInstance(app) }
+    private val trackRepo by lazy { TrackPointRepository(database.trackPointDao()) }
+    private val logRepo by lazy { JourneyLogRepository(database.journeyLogDao()) }
+    private val photoRepo by lazy { PhotoEntryRepository(database.photoEntryDao()) }
+    private val service = TrackingService(app)
 
-    /** 生ルート */
+    // Tracking state
     private val _path = MutableStateFlow<List<TrackPoint>>(emptyList())
-    val path: StateFlow<List<TrackPoint>> = _path
+    val path: StateFlow<List<TrackPoint>> = _path.asStateFlow()
 
-    /** 距離 (km) */
-    val distanceKm: StateFlow<Double> = _path
-        .map { calcDistance(it) }
+    val distanceKm: StateFlow<Double> = path
+        .map { it.calculateDistanceKm() }
         .stateIn(viewModelScope, SharingStarted.Lazily, 0.0)
 
-    /** 経過秒 */
     private val _elapsed = MutableStateFlow(0L)
-    val elapsed: StateFlow<Long> get() = _elapsed
-
+    val elapsed: StateFlow<Long> = _elapsed.asStateFlow()
     private var timerJob: Job? = null
 
-    /** 計測停止 → JourneyLog 保存 → TrackPoint 保存 */
+    // Photo attachments buffer
+    private val photoBuffer = mutableListOf<PhotoEntry>()
+    private val _photosFlow = MutableStateFlow<List<PhotoEntry>>(emptyList())
+    val photos: StateFlow<List<PhotoEntry>> = _photosFlow.asStateFlow()
 
-    /** 計測停止 → JourneyLog & TrackPoint を DB に保存 */
-//    fun stopAndSavePoints(title: String, thumbnail: Uri?) = viewModelScope.launch {
-//        // 1) 計測停止＆タイマーキャンセル
-//        service.stopTracking()
-//        timerJob?.cancel()
-//
-//        val path = service.path
-//        if (path.size < 2) return@launch
-//
-//        // 2) DB 書き込みは I/O スレッドでまとめて実行
-//        withContext(Dispatchers.IO) {
-//            // 2-1) JourneyLog を保存して logId を取得
-//            val log = JourneyLog(
-//                id = 0,
-//                title = title,
-//                date = LocalDateTime.now(),
-//                distanceKm = calcDistance(path),
-//                thumbnail = thumbnail
-//            )
-//            val logId = repo.upsert(log)
-//
-//            // 2-2) TrackPoint を保存
-//            trackRepo.savePath(logId, path)
-//        }
-//    }
-//
-    /** 計測開始 */
-    fun start() {
+    /** Start tracking and UI updates */
+    fun startTracking() {
         service.startTracking()
+        observePathUpdates()
+        startTimer()
+    }
 
-        // 位置取り込み
+    /** Stop, save log, points, and photos */
+    fun stopAndSaveLog(title: String, thumbnail: Uri?) {
+        viewModelScope.launch {
+            service.stopTracking()
+            timerJob?.cancel()
+            val points = service.path
+            if (points.size < 2) return@launch
+
+            val logId = saveJourneyLog(title, thumbnail, points)
+            saveTrackPointsAndPhotos(logId, points)
+            clearSession()
+        }
+    }
+
+    /** Add a photo to current session */
+    fun addPhoto(entry: PhotoEntry) {
+        photoBuffer += entry
+        _photosFlow.value = photoBuffer.toList()
+    }
+
+    /** Remove a photo by URI */
+    fun removePhoto(uri: Uri) {
+        // Remove from buffer
+        photoBuffer.removeAll { it.uri == uri }
+        // Update flow so observers see removal
+        _photosFlow.value = photoBuffer.toList()
+        // (B)――バックグラウンドでDBからも削除
+        viewModelScope.launch(Dispatchers.IO) {
+            photoRepo.deleteByUri(uri)
+        }
+    }
+
+    private fun observePathUpdates() {
         viewModelScope.launch {
             while (true) {
                 _path.value = service.path
                 delay(1000)
             }
         }
+    }
 
-        // 経過時計
+    private fun startTimer() {
         timerJob?.cancel()
         timerJob = viewModelScope.launch {
             val startTime = System.currentTimeMillis()
@@ -105,61 +111,59 @@ class TrackViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 2点間の距離を累積し km 単位で返す */
-    private fun calcDistance(points: List<TrackPoint>): Double {
-        if (points.size < 2) return 0.0
-        var dist = 0.0
-        points.windowed(2).forEach { (a, b) ->
-            dist += haversine(a.lat, a.lng, b.lat, b.lng)
-        }
-        return dist / 1000.0
+    private suspend fun saveJourneyLog(
+        title: String,
+        thumbnail: Uri?,
+        points: List<TrackPoint>
+    ): Long = withContext(Dispatchers.IO) {
+        val log = JourneyLog(
+            id = 0,
+            title = title,
+            date = LocalDateTime.now(),
+            distanceKm = points.calculateDistanceKm(),
+            thumbnail = thumbnail
+        )
+        logRepo.upsert(log)
     }
 
-    /** Haversine formula (m 単位) */
-    private fun haversine(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-        val R = 6371e3  // 地球半径 (m)
-        val φ1 = Math.toRadians(lat1)
-        val φ2 = Math.toRadians(lat2)
-        val Δφ = Math.toRadians(lat2 - lat1)
-        val Δλ = Math.toRadians(lon2 - lon1)
-        val a = sin(Δφ / 2).pow(2) +
-                cos(φ1) * cos(φ2) * sin(Δλ / 2).pow(2)
-        return 2 * R * asin(sqrt(a))
+    private suspend fun saveTrackPointsAndPhotos(
+        logId: Long,
+        points: List<TrackPoint>
+    ) = withContext(Dispatchers.IO) {
+        trackRepo.savePath(logId, points)
+        photoRepo.savePhotos(logId, photoBuffer)
     }
 
-    // 現在セッションで撮った写真を一時保持
-    private val db = AppDatabase.getInstance(app)
-    private val photoRepo = PhotoEntryRepository(db.photoEntryDao())
-    private val photoList = mutableListOf<PhotoEntry>()
-
-    fun addPhoto(entry: PhotoEntry) {
-        photoList.add(entry)
+    private fun clearSession() {
+        photoBuffer.clear()
+        _photosFlow.value = emptyList()
     }
 
-    fun stopAndSavePoints(title: String, thumbnail: Uri?) = viewModelScope.launch {
-        service.stopTracking()
-        timerJob?.cancel()
-        val path = service.path
-        if (path.size < 2) return@launch
+    // --- Utility extensions ---
+    private fun List<TrackPoint>.calculateDistanceKm(): Double {
+        if (size < 2) return 0.0
+        return windowed(2)
+            .sumOf { (a, b) -> haversine(a.lat, a.lng, b.lat, b.lng) / 1000.0 }
+    }
 
-        withContext(Dispatchers.IO) {
-            // 1) JourneyLog
-            val log = JourneyLog(
-                id = 0,
-                title = title,
-                date = LocalDateTime.now(),
-                distanceKm = calcDistance(path),
-                thumbnail = thumbnail
+    private fun haversine(
+        lat1: Double,
+        lon1: Double,
+        lat2: Double,
+        lon2: Double
+    ): Double {
+        val R = 6371e3
+        val φ1 = lat1.toRadians()
+        val φ2 = lat2.toRadians()
+        val Δφ = (lat2 - lat1).toRadians()
+        val Δλ = (lon2 - lon1).toRadians()
+        return 2 * R * asin(
+            sqrt(
+                sin(Δφ / 2).pow(2) +
+                        cos(φ1) * cos(φ2) * sin(Δλ / 2).pow(2)
             )
-            val logId = repo.upsert(log)
-
-            // 2) TrackPoints
-            trackRepo.savePath(logId, path)
-
-            // 3) PhotoEntries（ここでDBに保存）
-            photoRepo.savePhotos(logId, photoList)
-        }
-        // セッション後はリストクリア
-        photoList.clear()
+        )
     }
+
+    private fun Double.toRadians() = Math.toRadians(this)
 }
