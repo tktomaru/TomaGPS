@@ -25,8 +25,10 @@ import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.OnMapReadyCallback
 import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.model.BitmapDescriptorFactory
+import com.google.android.gms.maps.model.CircleOptions
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.MarkerOptions
+import com.google.android.gms.maps.model.Polyline
 import com.google.android.gms.maps.model.PolylineOptions
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -43,6 +45,11 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
     private lateinit var map: GoogleMap
     private var tracking = false
     private lateinit var fusedClient: FusedLocationProviderClient
+
+    // １度だけ作るPolyline
+    private var polyline: Polyline? = null
+    // 追加済みのデータ数を覚えておく
+    private var lastDrawnSize = 0
 
     private fun onStopTracking() {
         // サービス停止は ViewModel 側でも行われるので省略可。ここではタイトル入力と保存呼び出し
@@ -164,18 +171,32 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
     }
 
     /* 地図描画 */
+    // ViewModel の path.collect { drawPath(it) } から呼ばれる
     private fun drawPath(points: List<TrackPoint>) {
         if (!::map.isInitialized || points.isEmpty()) return
-        map.clear()
-        val poly = PolylineOptions().apply {
-            points.forEach { add(LatLng(it.lat, it.lng)) }
-            width(6f)
-            color(ContextCompat.getColor(requireContext(), R.color.purple_500))
+
+        // 増分だけ点を追加
+        for (i in lastDrawnSize until points.size) {
+            val p = points[i]
+            map.addCircle(
+                CircleOptions()
+                    .center(LatLng(p.lat, p.lng))
+                    .radius(2.0)
+                    .strokeWidth(0f)
+                    .fillColor(ContextCompat.getColor(requireContext(), R.color.purple_200))
+            )
         }
-        map.addPolyline(poly)
-        // カメラフォロー
+        lastDrawnSize = points.size
+
+        // ポリライン全体を更新
+        polyline?.points = points.map { LatLng(it.lat, it.lng) }
+
+        // カメラを追従
         val last = points.last()
-        map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(last.lat, last.lng), 15f))
+        map.animateCamera(CameraUpdateFactory.newLatLngZoom(
+            LatLng(last.lat, last.lng),
+            map.cameraPosition.zoom
+        ))
     }
 
     override fun onMapReady(googleMap: GoogleMap) {
@@ -188,6 +209,19 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
             == PackageManager.PERMISSION_GRANTED
         ) {
             map.isMyLocationEnabled = true
+        }
+        // 1) 最初に一度だけ Polyline を作成
+        polyline = map.addPolyline(
+            PolylineOptions()
+                .width(6f)
+                .color(ContextCompat.getColor(requireContext(), R.color.purple_500))
+        )
+
+        // 2) Polyline が用意できてから Flow を購読
+        viewLifecycleOwner.lifecycleScope.launchWhenStarted {
+            vm.path.collect { points ->
+                drawPath(points)
+            }
         }
     }
 
@@ -221,5 +255,11 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
                 }
             }
         }
-
+    // Fragmentが再び前面に来たときにも再描画
+    override fun onResume() {
+        super.onResume()
+        if (::map.isInitialized) {
+            drawPath(vm.path.value)
+        }
+    }
 }
