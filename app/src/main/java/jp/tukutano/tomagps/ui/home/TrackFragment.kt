@@ -18,6 +18,8 @@ import androidx.core.content.FileProvider
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.OnMapReadyCallback
@@ -40,6 +42,7 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
     private val vm: TrackViewModel by viewModels()
     private lateinit var map: GoogleMap
     private var tracking = false
+    private lateinit var fusedClient: FusedLocationProviderClient
 
     private fun onStopTracking() {
         // サービス停止は ViewModel 側でも行われるので省略可。ここではタイトル入力と保存呼び出し
@@ -56,8 +59,10 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
                     val thumbUri = saveBmp(requireContext(), bmp)
                     // ここで必ず title, thumbnail を渡す
                     vm.stopAndSavePoints(title, thumbUri)
-                    Toast.makeText(requireContext(),
-                        "ログを保存しました", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        requireContext(),
+                        "ログを保存しました", Toast.LENGTH_SHORT
+                    ).show()
                 }
             }
             .setNegativeButton("破棄", null)
@@ -70,7 +75,9 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
             .getMapAsync(this)
 
         val fabStartStop = view.findViewById<FloatingActionButton>(R.id.fabStartStop)
-        val fabCamera    = view.findViewById<FloatingActionButton>(R.id.fabCamera)
+        val fabCamera = view.findViewById<FloatingActionButton>(R.id.fabCamera)
+        val fabMyLocation = view.findViewById<FloatingActionButton>(R.id.fabMyLocation)
+        fusedClient = LocationServices.getFusedLocationProviderClient(requireContext())
 
         fabStartStop.setOnClickListener {
             if (!tracking) {
@@ -91,7 +98,33 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
                     Intent(requireContext(), PhotoCaptureActivity::class.java)
                 )
             } else {
-                Toast.makeText(requireContext(), "まず計測を開始してください", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "まず計測を開始してください", Toast.LENGTH_SHORT)
+                    .show()
+            }
+        }
+
+        fabMyLocation.setOnClickListener {
+            // 1) 権限確認
+            if (ContextCompat.checkSelfPermission(
+                    requireContext(),
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                )
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                // 必要ならリクエスト
+                requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 1001)
+                return@setOnClickListener
+            }
+            // 2) 直近の現在地を取得
+            fusedClient.lastLocation.addOnSuccessListener { loc ->
+                if (loc != null && ::map.isInitialized) {
+                    val now = LatLng(loc.latitude, loc.longitude)
+                    // マーカーがいらなければ省略
+                    map.animateCamera(CameraUpdateFactory.newLatLngZoom(now, 15f))
+                } else {
+                    Toast.makeText(requireContext(), "現在地が取得できません", Toast.LENGTH_SHORT)
+                        .show()
+                }
             }
         }
 
@@ -148,9 +181,12 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
     override fun onMapReady(googleMap: GoogleMap) {
         map = googleMap
         map.uiSettings.isMyLocationButtonEnabled = false
-        if (ContextCompat.checkSelfPermission(requireContext(),
-                Manifest.permission.ACCESS_FINE_LOCATION)
-            == PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(
+                requireContext(),
+                Manifest.permission.ACCESS_FINE_LOCATION
+            )
+            == PackageManager.PERMISSION_GRANTED
+        ) {
             map.isMyLocationEnabled = true
         }
     }
@@ -169,9 +205,9 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
             if (result.resultCode == Activity.RESULT_OK) {
                 result.data?.let { data ->
                     val uriStr = data.getStringExtra("photo_uri") ?: return@let
-                    val lat    = data.getDoubleExtra("lat", Double.NaN)
-                    val lng    = data.getDoubleExtra("lng", Double.NaN)
-                    val uri    = Uri.parse(uriStr)
+                    val lat = data.getDoubleExtra("lat", Double.NaN)
+                    val lng = data.getDoubleExtra("lng", Double.NaN)
+                    val uri = Uri.parse(uriStr)
                     // タイムスタンプは現在時刻を使う
                     val entry = PhotoEntry(uri, lat, lng, System.currentTimeMillis())
                     // ViewModel へ追加
@@ -179,8 +215,8 @@ class TrackFragment : Fragment(R.layout.fragment_track), OnMapReadyCallback {
                     // 地図上にもマーカーを表示
                     map.addMarker(
                         MarkerOptions()
-                        .position(LatLng(lat, lng))
-                        .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE))
+                            .position(LatLng(lat, lng))
+                            .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE))
                     )
                 }
             }

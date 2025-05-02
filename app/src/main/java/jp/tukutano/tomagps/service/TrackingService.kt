@@ -37,14 +37,18 @@ class TrackingService(private val app: Application) {
         }
 
         // 2) リクエスト設定
-        val req = LocationRequest.create().apply {
-            interval = 2000             // 正常更新間隔：2秒
-            fastestInterval = 1000      // 最短更新間隔：1秒
-            priority = Priority.PRIORITY_HIGH_ACCURACY
-        }
+        // 新 API (Play Services 21.0.0+)
+        val locationRequest = LocationRequest.Builder(
+            Priority.PRIORITY_BALANCED_POWER_ACCURACY,    // バランスパワー GPS
+            1_000L                               // 更新要求間隔：30 秒
+        )
+            .setMinUpdateIntervalMillis(1_000L)     // 最速更新間隔：1 秒
+            // .setMaxUpdateDelayMillis(2_000L)   // 遅延許容上限を設定する場合
+            // .setMaxUpdates(10)                 // 最大取得回数を設定する場合
+            .build()
 
         // 3) 位置情報取得開始
-        fusedClient.requestLocationUpdates(req, locCallback, app.mainLooper)
+        fusedClient.requestLocationUpdates(locationRequest, locCallback, app.mainLooper)
     }
 
     fun stopTracking() {
