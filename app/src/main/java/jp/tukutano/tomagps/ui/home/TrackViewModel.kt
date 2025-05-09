@@ -25,8 +25,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 import kotlin.math.*
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.launchIn
 
-class TrackViewModel(app: Application) : AndroidViewModel(app) {
+class TrackViewModel(app: Application,
+                     private val resumeLogId: Long?) : AndroidViewModel(app) {
 
     // Database & Repositories
     private val database by lazy { AppDatabase.getInstance(app) }
@@ -51,6 +54,19 @@ class TrackViewModel(app: Application) : AndroidViewModel(app) {
     private val photoBuffer = mutableListOf<PhotoEntry>()
     private val _photosFlow = MutableStateFlow<List<PhotoEntry>>(emptyList())
     val photos: StateFlow<List<PhotoEntry>> = _photosFlow.asStateFlow()
+
+
+    init {
+        // 再開時：DB から過去ポイントをロード
+        resumeLogId?.let { id ->
+            trackRepo.getPointsByLog(id)
+                .onEach { pts ->
+                    _path.value = pts
+                    service.setInitialPath(pts)
+                }
+                .launchIn(viewModelScope)
+        }
+    }
 
     /** Start tracking and UI updates */
     fun startTracking() {
@@ -166,4 +182,5 @@ class TrackViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun Double.toRadians() = Math.toRadians(this)
+
 }

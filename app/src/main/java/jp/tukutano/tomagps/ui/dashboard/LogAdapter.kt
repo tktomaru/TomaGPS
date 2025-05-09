@@ -20,6 +20,7 @@ class LogAdapter(
     interface Listener {
         fun onItemClicked(log: JourneyLog)
         fun onDeleteClicked(log: JourneyLog)
+        fun onResumeClicked(log: JourneyLog)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -32,7 +33,7 @@ class LogAdapter(
     }
 
     override fun onBindViewHolder(holder: VH, position: Int) {
-        holder.bind(getItem(position))
+        holder.bind(getItem(position), listener)
     }
 
     class VH(
@@ -52,7 +53,7 @@ class LogAdapter(
             }
         }
 
-        fun bind(log: JourneyLog) {
+        fun bind(log: JourneyLog, listener: Listener) {
             binding.log = log
             binding.listener = listener  // ここで listener を設定
 

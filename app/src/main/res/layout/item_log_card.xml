@@ -65,6 +65,17 @@
                 app:layout_constraintTop_toBottomOf="@id/txtDate"
                 app:layout_constraintEnd_toEndOf="@id/txtTitle"/>
 
+            <ImageButton
+                android:id="@+id/btnResume"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:contentDescription="再開"
+                android:src="@drawable/ic_play"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:onClick="@{() -> listener.onResumeClicked(log)}"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintEnd_toStartOf="@id/btnDetail"/>
+
             <!-- 詳細ボタン -->
             <Button
                 android:id="@+id/btnDetail"

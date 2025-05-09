@@ -11,19 +11,25 @@ data class TrackPoint(val lat: Double, val lng: Double, val time: Long)
 
 class TrackingService(private val app: Application) {
 
+    private val _internalPath = mutableListOf<TrackPoint>()
+
+    fun setInitialPath(points: List<TrackPoint>) {
+        _internalPath.clear()
+        _internalPath.addAll(points)
+    }
+
     // 位置取得用クライアント
     private val fusedClient: FusedLocationProviderClient =
         LocationServices.getFusedLocationProviderClient(app)
 
     // 取得した軌跡を貯めるリスト
-    private val _path = mutableListOf<TrackPoint>()
-    val path: List<TrackPoint> get() = _path
+    val path: List<TrackPoint> get() = _internalPath
 
     // ロケーションコールバック
     private val locCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             result.locations.forEach { loc ->
-                _path.add(TrackPoint(loc.latitude, loc.longitude, loc.time))
+                _internalPath.add(TrackPoint(loc.latitude, loc.longitude, loc.time))
             }
         }
     }

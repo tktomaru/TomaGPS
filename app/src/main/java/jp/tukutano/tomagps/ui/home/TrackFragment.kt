@@ -2,6 +2,7 @@ package jp.tukutano.tomagps.ui.home
 
 import android.Manifest
 import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -42,7 +43,12 @@ class TrackFragment : Fragment(R.layout.fragment_track),
 
     private var _binding: FragmentTrackBinding? = null
     private val binding get() = _binding!!
-    private val vm: TrackViewModel by viewModels()
+    private val resumeLogId: Long? by lazy {
+        arguments?.getLong("resumeLogId").takeIf { it != 0L }
+    }
+    private val vm: TrackViewModel by viewModels {
+        TrackViewModelFactory(requireActivity().application as Application, resumeLogId)
+    }
 
     private lateinit var map: GoogleMap
     private lateinit var fusedClient: FusedLocationProviderClient

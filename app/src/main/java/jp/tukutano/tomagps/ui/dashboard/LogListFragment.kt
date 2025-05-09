@@ -7,6 +7,7 @@ import android.view.View
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
+import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import jp.tukutano.tomagps.R
@@ -44,6 +45,12 @@ class LogListFragment : Fragment(R.layout.fragment_log_list) {
                 .show()
         }
 
+        override fun onResumeClicked(log: JourneyLog) {
+            // NavController で TrackFragment に遷移し、resumeLogId を渡す
+            val bundle = Bundle().apply { putLong("resumeLogId", log.id) }
+            findNavController()
+                .navigate(R.id.action_navigation_dashboard_to_navigation_home, bundle)
+        }
     });
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
