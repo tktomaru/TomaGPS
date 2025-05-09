@@ -70,6 +70,13 @@ class TrackViewModel(app: Application,
 
     /** Start tracking and UI updates */
     fun startTracking() {
+        // 前回のセッションデータをクリアしてから再開
+        when {
+            // （A） 新規記録時（resumeLogId が null の場合）
+            resumeLogId == null -> {
+                clearSession()
+            }
+        }
         service.startTracking()
         observePathUpdates()
         startTimer()
@@ -153,6 +160,12 @@ class TrackViewModel(app: Application,
     private fun clearSession() {
         photoBuffer.clear()
         _photosFlow.value = emptyList()
+        // 軌跡データ（path）をクリア
+        _path.value = emptyList()
+        // 経過時間をリセット
+        _elapsed.value = 0L
+        // Service内部の path も空にしておく
+        service.setInitialPath(emptyList())
     }
 
     // --- Utility extensions ---
